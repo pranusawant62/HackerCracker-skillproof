@@ -223,6 +223,246 @@ function computeNameSimilarity(nameA = '', nameB = '') {
 }
 
 /**
+ * Normalizes a name string into clean, lowercase tokens,
+ * stripping titles, middle initials periods, and punctuation.
+ * 
+ * @param {string} name 
+ * @returns {string[]}
+ */
+export function normalizeNameTokens(name = '') {
+  if (!name || typeof name !== 'string') return [];
+  return name
+    .toLowerCase()
+    .replace(/^(mr|mrs|ms|dr|prof)\.?\s+/i, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Intelligently compares two names for reasonable consistency:
+ * - lowercase, trim, ignores repeated spaces
+ * - handles punctuation differences ("Swetha, Konney", "Swetha-Konney")
+ * - supports first/last name order ("Swetha Konney" vs "Konney Swetha")
+ * - supports abbreviation / initials ("Swetha Konney" vs "Swetha K." or "S. Konney")
+ * - identifies clear contradictions ("Swetha Konney" vs "Rahul Sharma")
+ * 
+ * @param {string} nameA - Candidate registered name
+ * @param {string} nameB - Target name from Resume or GitHub
+ * @returns {{ isMatch: boolean, isConflict: boolean, status: 'MATCH' | 'CONFLICT' | 'UNVERIFIED', reason?: string }}
+ */
+export function checkNameConsistency(nameA = '', nameB = '') {
+  if (!nameA || typeof nameA !== 'string' || !nameA.trim()) {
+    return {
+      isMatch: true,
+      isConflict: false,
+      status: 'MATCH'
+    };
+  }
+
+  if (!nameB || typeof nameB !== 'string' || !nameB.trim()) {
+    return {
+      isMatch: false,
+      isConflict: false,
+      status: 'UNVERIFIED',
+      reason: 'Name information could not be reliably extracted.'
+    };
+  }
+
+  const tokensA = normalizeNameTokens(nameA);
+  const tokensB = normalizeNameTokens(nameB);
+
+  if (tokensA.length === 0 || tokensB.length === 0) {
+    return {
+      isMatch: false,
+      isConflict: false,
+      status: 'UNVERIFIED',
+      reason: 'Name information could not be reliably extracted.'
+    };
+  }
+
+  // Exact joined match
+  if (tokensA.join(' ') === tokensB.join(' ')) {
+    return { isMatch: true, isConflict: false, status: 'MATCH' };
+  }
+
+  // Set-based token comparison (handles reversed order "Konney Swetha" vs "Swetha Konney")
+  const setA = new Set(tokensA);
+  const setB = new Set(tokensB);
+  const sharedTokens = tokensA.filter(t => setB.has(t));
+
+  // If all tokens of one are in the other
+  if (sharedTokens.length >= 2 && (sharedTokens.length === tokensA.length || sharedTokens.length === tokensB.length)) {
+    return { isMatch: true, isConflict: false, status: 'MATCH' };
+  }
+
+  const firstA = tokensA[0];
+  const lastA = tokensA[tokensA.length - 1];
+  const firstB = tokensB[0];
+  const lastB = tokensB[tokensB.length - 1];
+
+  // 1. Same first name, and last name matches or is an initial:
+  // e.g. "Swetha Konney" vs "Swetha K."
+  const firstNameMatches = (firstA === firstB);
+  const lastNameMatches = (lastA === lastB);
+  const lastIsInitial = (lastA.length === 1 && lastB.startsWith(lastA)) || (lastB.length === 1 && lastA.startsWith(lastB));
+  const firstIsInitial = (firstA.length === 1 && firstB.startsWith(firstA)) || (firstB.length === 1 && firstA.startsWith(firstB));
+
+  if (firstNameMatches && (lastNameMatches || lastIsInitial)) {
+    return { isMatch: true, isConflict: false, status: 'MATCH' };
+  }
+
+  // 2. Same last name, and first name matches or is an initial:
+  // e.g. "Swetha Konney" vs "S. Konney"
+  if (lastNameMatches && (firstNameMatches || firstIsInitial)) {
+    return { isMatch: true, isConflict: false, status: 'MATCH' };
+  }
+
+  // 3. Reversed order with initials (e.g. "Konney S." vs "Swetha Konney")
+  if (firstA === lastB && (lastA === firstB || (lastA.length === 1 && firstB.startsWith(lastA)) || (firstB.length === 1 && lastA.startsWith(firstB)))) {
+    return { isMatch: true, isConflict: false, status: 'MATCH' };
+  }
+
+  // 4. Single token match if display name is just first or last name (>= 4 chars):
+  // e.g. "Swetha" on GitHub display name matching "Swetha Konney"
+  if (tokensB.length === 1 && tokensA.some(t => t === tokensB[0] && t.length >= 4)) {
+    return { isMatch: true, isConflict: false, status: 'MATCH' };
+  }
+  if (tokensA.length === 1 && tokensB.some(t => t === tokensA[0] && t.length >= 4)) {
+    return { isMatch: true, isConflict: false, status: 'MATCH' };
+  }
+
+  // 5. If at least 2 tokens match or 1 substantial token (>= 5 chars) matches:
+  if (sharedTokens.length >= 2 || (sharedTokens.length === 1 && sharedTokens[0].length >= 5 && (firstA === firstB || lastA === lastB))) {
+    return { isMatch: true, isConflict: false, status: 'MATCH' };
+  }
+
+  // Zero shared tokens -> CLEAR CONTRADICTION / MISMATCH (e.g. "Swetha Konney" vs "Rahul Sharma")
+  return {
+    isMatch: false,
+    isConflict: true,
+    status: 'CONFLICT',
+    reason: `Names "${nameA}" and "${nameB}" clearly belong to different individuals.`
+  };
+}
+
+/**
+ * Evaluates whether a GitHub profile reasonably matches a registered candidate identity.
+ * 
+ * Rules:
+ * - Does NOT require exact username match because usernames differ from real names.
+ * - If GitHub display name matches candidate name -> MATCH
+ * - If GitHub username resembles candidate name (e.g. "swetha123" vs "Swetha Konney") -> MATCH
+ * - If GitHub email matches candidate/resume email -> MATCH
+ * - If resume explicitly links this GitHub profile -> MATCH
+ * - If GitHub display name clearly belongs to another person (e.g. "Rahul Sharma" vs "Swetha Konney") -> CONFLICT
+ * - If ownership cannot be established at all -> UNVERIFIED
+ * 
+ * @param {object} params
+ * @param {string} params.candidateName
+ * @param {object} params.githubIdentity
+ * @param {object} params.resumeIdentity
+ * @param {string} params.submittedUsername
+ * @returns {{ isMatch: boolean, isConflict: boolean, status: 'MATCH' | 'CONFLICT' | 'UNVERIFIED', message: string }}
+ */
+export function checkGithubIdentityConsistency({
+  candidateName = '',
+  githubIdentity = {},
+  resumeIdentity = {},
+  submittedUsername = ''
+} = {}) {
+  const targetUsername = (submittedUsername || githubIdentity.username || '').trim().replace(/^@/, '');
+  const gUser = targetUsername.toLowerCase();
+  const gName = githubIdentity.name ? githubIdentity.name.trim() : null;
+  const gEmail = githubIdentity.email ? githubIdentity.email.toLowerCase().trim() : null;
+  const rEmail = resumeIdentity.email ? resumeIdentity.email.toLowerCase().trim() : null;
+  const rGhUser = resumeIdentity.githubUsername ? resumeIdentity.githubUsername.toLowerCase().trim() : null;
+
+  // 1. If GitHub profile has a public display name, compare with candidate name
+  if (gName && candidateName) {
+    const consistency = checkNameConsistency(candidateName, gName);
+    if (consistency.isConflict) {
+      return {
+        isMatch: false,
+        isConflict: true,
+        status: 'CONFLICT',
+        message: 'Identity mismatch: This GitHub profile could not be matched to the registered candidate.'
+      };
+    }
+    if (consistency.isMatch) {
+      return {
+        isMatch: true,
+        isConflict: false,
+        status: 'MATCH',
+        message: `GitHub display name "${gName}" matches registered candidate name "${candidateName}".`
+      };
+    }
+  }
+
+  // 2. Check if GitHub username resembles candidate name (e.g. "swetha123", "swethak", "swetha-konney", "konney")
+  if (candidateName && gUser) {
+    const candTokens = normalizeNameTokens(candidateName);
+    const cleanUser = gUser.replace(/[^a-z0-9]/g, '');
+    
+    // Check if cleanUser contains any candidate name token of >= 3 characters (e.g. "swetha" in "swetha123")
+    const tokenMatch = candTokens.some(t => t.length >= 3 && cleanUser.includes(t));
+    // Or initial + last name (e.g. "skonney" or "konneys")
+    const initialMatch = candTokens.length >= 2 && (
+      (cleanUser.startsWith(candTokens[0][0]) && cleanUser.includes(candTokens[candTokens.length - 1])) ||
+      (cleanUser.includes(candTokens[candTokens.length - 1]) && cleanUser.includes(candTokens[0][0]))
+    );
+
+    if (tokenMatch || initialMatch) {
+      return {
+        isMatch: true,
+        isConflict: false,
+        status: 'MATCH',
+        message: `GitHub username (@${targetUsername}) is consistent with registered candidate name "${candidateName}".`
+      };
+    }
+  }
+
+  // 3. Check if resume explicitly links this GitHub username
+  if (rGhUser && rGhUser === gUser) {
+    return {
+      isMatch: true,
+      isConflict: false,
+      status: 'MATCH',
+      message: `Resume explicitly verifies GitHub handle @${targetUsername}.`
+    };
+  }
+
+  // 4. Check if public email matches resume email
+  if (gEmail && rEmail && gEmail === rEmail) {
+    return {
+      isMatch: true,
+      isConflict: false,
+      status: 'MATCH',
+      message: `GitHub public email matches candidate resume email (${gEmail}).`
+    };
+  }
+
+  // 5. If GitHub has a display name that didn't match and didn't clearly conflict, but has no other connection:
+  if (gName) {
+    return {
+      isMatch: false,
+      isConflict: true,
+      status: 'CONFLICT',
+      message: 'Identity mismatch: This GitHub profile could not be matched to the registered candidate.'
+    };
+  }
+
+  // 6. Otherwise cannot reliably establish ownership:
+  return {
+    isMatch: false,
+    isConflict: false,
+    status: 'UNVERIFIED',
+    message: 'Unable to verify GitHub profile ownership. Please connect a GitHub profile that can be associated with your registered identity.'
+  };
+}
+
+/**
  * Verifies candidate identity between resume claims and submitted GitHub profile.
  * 
  * Identity Statuses:
@@ -237,17 +477,141 @@ function computeNameSimilarity(nameA = '', nameB = '') {
  * - Never fabricate evidence or links.
  * 
  * @param {object} params
+ * @param {string} [params.candidateName] - Registered candidate full name
  * @param {object} params.resumeIdentity - Extracted resume identity
  * @param {object} params.githubIdentity - GitHub profile identity
  * @param {string} params.submittedUsername - Username submitted in verification form
  * @returns {object} Identity verification report
  */
 export function verifyCandidateIdentity({
+  candidateName = '',
   resumeIdentity = {},
   githubIdentity = {},
   submittedUsername = ''
 } = {}) {
   const targetUsername = (submittedUsername || githubIdentity.username || '').trim().replace(/^@/, '');
+  const cleanCandName = (candidateName || '').trim();
+
+  // 1. Resume Identity Check against candidateName
+  let resumeCheck = null;
+  if (cleanCandName) {
+    if (!resumeIdentity.name) {
+      resumeCheck = {
+        verified: false,
+        status: 'UNVERIFIED',
+        message: "Unable to verify the resume owner's identity. Please upload a resume containing your name."
+      };
+    } else {
+      const consistency = checkNameConsistency(cleanCandName, resumeIdentity.name);
+      if (consistency.isConflict) {
+        resumeCheck = {
+          verified: false,
+          status: 'MISMATCH',
+          message: "Identity mismatch: The name on this resume does not match the registered candidate."
+        };
+      } else if (consistency.isMatch) {
+        resumeCheck = {
+          verified: true,
+          status: 'VERIFIED',
+          message: `Resume candidate name "${resumeIdentity.name}" matches registered candidate.`
+        };
+      } else {
+        resumeCheck = {
+          verified: false,
+          status: 'UNVERIFIED',
+          message: "Unable to verify the resume owner's identity. Please upload a resume containing your name."
+        };
+      }
+    }
+  }
+
+  // 2. GitHub Identity Check
+  let githubCheck = null;
+  if (cleanCandName) {
+    const ghCheckResult = checkGithubIdentityConsistency({
+      candidateName: cleanCandName,
+      githubIdentity,
+      resumeIdentity,
+      submittedUsername: targetUsername
+    });
+    githubCheck = {
+      verified: ghCheckResult.status === 'MATCH',
+      status: ghCheckResult.status,
+      message: ghCheckResult.message
+    };
+  }
+
+  // If candidateName was provided, enforce strict Candidate Identity Consistency:
+  if (cleanCandName) {
+    if (resumeCheck && resumeCheck.status === 'MISMATCH') {
+      return {
+        status: 'MISMATCH',
+        identityStatus: 'failed',
+        confidence: 0,
+        isBlocked: true,
+        blockReason: resumeCheck.message,
+        reasons: [resumeCheck.message],
+        signals: [
+          { signal: 'Resume Candidate Identity', type: 'resume_name', label: 'Resume Candidate Identity', status: 'CONFLICT', details: resumeCheck.message }
+        ],
+        resumeIdentity,
+        githubIdentity,
+        candidateName: cleanCandName
+      };
+    }
+
+    if (githubCheck && githubCheck.status === 'CONFLICT') {
+      return {
+        status: 'MISMATCH',
+        identityStatus: 'failed',
+        confidence: 0,
+        isBlocked: true,
+        blockReason: githubCheck.message,
+        reasons: [githubCheck.message],
+        signals: [
+          { signal: 'GitHub Profile Ownership', type: 'github_profile', label: 'GitHub Profile Ownership', status: 'CONFLICT', details: githubCheck.message }
+        ],
+        resumeIdentity,
+        githubIdentity,
+        candidateName: cleanCandName
+      };
+    }
+
+    if (resumeCheck && resumeCheck.status === 'UNVERIFIED') {
+      return {
+        status: 'INSUFFICIENT_EVIDENCE',
+        identityStatus: 'failed',
+        confidence: 0,
+        isBlocked: true,
+        blockReason: resumeCheck.message,
+        reasons: [resumeCheck.message],
+        signals: [
+          { signal: 'Resume Candidate Identity', type: 'resume_name', label: 'Resume Candidate Identity', status: 'INSUFFICIENT', details: resumeCheck.message }
+        ],
+        resumeIdentity,
+        githubIdentity,
+        candidateName: cleanCandName
+      };
+    }
+
+    if (githubCheck && githubCheck.status === 'UNVERIFIED') {
+      return {
+        status: 'INSUFFICIENT_EVIDENCE',
+        identityStatus: 'failed',
+        confidence: 0,
+        isBlocked: true,
+        blockReason: githubCheck.message,
+        reasons: [githubCheck.message],
+        signals: [
+          { signal: 'GitHub Profile Ownership', type: 'github_profile', label: 'GitHub Profile Ownership', status: 'INSUFFICIENT', details: githubCheck.message }
+        ],
+        resumeIdentity,
+        githubIdentity,
+        candidateName: cleanCandName
+      };
+    }
+  }
+
   const rName = resumeIdentity.name || null;
   const rEmail = resumeIdentity.email ? resumeIdentity.email.toLowerCase() : null;
   const rGhUser = resumeIdentity.githubUsername ? resumeIdentity.githubUsername.toLowerCase() : null;
@@ -266,6 +630,28 @@ export function verifyCandidateIdentity({
 
   let confidenceScore = 0;
   let hasCriticalConflict = false;
+
+  if (cleanCandName && resumeCheck?.verified) {
+    signals.push({
+      signal: 'Candidate Identity Consistency',
+      type: 'candidate_consistency',
+      label: 'Candidate Identity Consistency',
+      status: 'MATCH',
+      details: resumeCheck.message
+    });
+    confidenceScore += 30;
+  }
+
+  if (cleanCandName && githubCheck?.verified) {
+    signals.push({
+      signal: 'Candidate-GitHub Association',
+      type: 'candidate_github_association',
+      label: 'Candidate-GitHub Association',
+      status: 'MATCH',
+      details: githubCheck.message
+    });
+    confidenceScore += 30;
+  }
 
   // ========================================================
   // 1. GITHUB USERNAME & URL EVALUATION
@@ -346,8 +732,8 @@ export function verifyCandidateIdentity({
   // 2. CANDIDATE FULL NAME VS GITHUB DISPLAY NAME
   // ========================================================
   if (gName && rName) {
-    const similarity = computeNameSimilarity(rName, gName);
-    if (similarity >= 0.8) {
+    const consistency = checkNameConsistency(rName, gName);
+    if (consistency.isMatch) {
       signals.push({
         signal: 'Candidate Full Name',
         type: 'full_name',
@@ -356,16 +742,7 @@ export function verifyCandidateIdentity({
         details: `Candidate name "${rName}" matches GitHub display name "${gName}".`
       });
       confidenceScore += 35;
-    } else if (similarity >= 0.4) {
-      signals.push({
-        signal: 'Candidate Full Name',
-        type: 'full_name',
-        label: 'Candidate Full Name',
-        status: 'NEUTRAL',
-        details: `Partial name resemblance between "${rName}" and GitHub display name "${gName}".`
-      });
-      confidenceScore += 10;
-    } else {
+    } else if (consistency.isConflict) {
       // Concrete name contradiction: completely different person
       hasCriticalConflict = true;
       signals.push({
@@ -376,6 +753,15 @@ export function verifyCandidateIdentity({
         details: `Candidate name "${rName}" contradicts GitHub profile display name "${gName}".`
       });
       reasons.push(`Candidate name on resume ("${rName}") does not match GitHub profile name ("${gName}").`);
+    } else {
+      signals.push({
+        signal: 'Candidate Full Name',
+        type: 'full_name',
+        label: 'Candidate Full Name',
+        status: 'NEUTRAL',
+        details: `Partial name resemblance between "${rName}" and GitHub display name "${gName}".`
+      });
+      confidenceScore += 10;
     }
   } else if (!gName && rName) {
     signals.push({

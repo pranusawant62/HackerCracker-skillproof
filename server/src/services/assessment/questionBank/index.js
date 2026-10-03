@@ -326,7 +326,6 @@ export function getQuestionsForSkill(skillName) {
 
   let rawQuestions = [];
   if (entry && Array.isArray(entry.questions) && entry.questions.length >= 5) {
-    // Take the 5 progressive questions
     rawQuestions = entry.questions.slice(0, 5);
   } else {
     // Dynamic generator for future or custom skills

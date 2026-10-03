@@ -96,7 +96,7 @@ const evidenceUpload = multer({
  */
 router.post('/verify', handleFileUpload, async (req, res) => {
   try {
-    const { githubUsername } = req.body;
+    const { githubUsername, candidateName } = req.body;
     const resumeFile = req.file;
 
     // Validate required fields
@@ -143,87 +143,17 @@ router.post('/verify', handleFileUpload, async (req, res) => {
       githubError = ghErr.message || 'GitHub profile could not be reached.';
     }
 
-    // 5. Run Candidate Identity Verification (Simplified Rule: At least 1 match verifies)
+    // 5. Run Candidate Identity Verification (Checks Candidate Identity Consistency)
     const githubIdentity = extractGithubIdentity(githubProfile || { username: cleanUsername });
     const identityResult = verifyCandidateIdentity({
+      candidateName: (candidateName || '').trim(),
       resumeIdentity,
       githubIdentity,
       submittedUsername: cleanUsername
     });
 
     // ========================================================
-    // HARD SECURITY GATE:
-    // If identity verification != 'VERIFIED':
-    // - DO NOT analyze GitHub repositories
-    // - DO NOT attribute foreign codebase evidence to candidate
-    // - Mark all claimed skills as UNVERIFIED with blocked explanation
-    // ========================================================
-    if (identityResult.status !== 'VERIFIED') {
-      const blockedReason = identityResult.status === 'MISMATCH'
-        ? 'Identity mismatch detected: The submitted GitHub profile could not be sufficiently linked to the candidate in the uploaded resume. Skill verification has been blocked.'
-        : 'Insufficient identity evidence: The submitted GitHub profile could not be conclusively linked to the candidate in the uploaded resume. Skill verification has been blocked.';
-
-      const blockedCrossVerification = {
-        summary: {
-          totalClaimed: claimedSkills.length,
-          proved: 0,
-          partial: 0,
-          unverified: claimedSkills.length,
-          verificationRate: 0,
-          assessment: `Skill verification blocked: Candidate identity status is ${identityResult.status}. Skills from an unlinked GitHub profile cannot be attributed to this candidate.`
-        },
-        results: claimedSkills.map(c => ({
-          skill: c.skill,
-          category: c.category || 'Other',
-          matchedTerm: c.matchedTerm || c.skill,
-          resumeClaim: {
-            skill: c.skill,
-            category: c.category || 'Other',
-            matchedTerm: c.matchedTerm || c.skill
-          },
-          status: 'UNVERIFIED',
-          explanation: `Skill verification blocked: ${blockedReason}`,
-          repositories: [],
-          evidence: []
-        }))
-      };
-
-      const normalizedBlockedSkills = claimedSkills.map((c, idx) => ({
-        id: `skill_${idx + 1}_${c.skill.toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
-        skill: c.skill,
-        category: c.category || 'Other',
-        matchedTerm: c.matchedTerm || c.skill,
-        claimSource: 'resume',
-        status: 'unverified',
-        evidence: [],
-        explanation: `Skill verification blocked: ${blockedReason}`
-      }));
-
-      return res.status(200).json({
-        success: true,
-        isBlocked: true,
-        blockReason: blockedReason,
-        identityVerification: identityResult,
-        githubUsername: cleanUsername,
-        resume: {
-          filename: resumeFile.originalname,
-          pages: extracted.pages,
-          textLength: extracted.textLength,
-          identity: resumeIdentity
-        },
-        claimedSkills: normalizedBlockedSkills,
-        github: {
-          profile: githubProfile,
-          repositories: [],
-          evidence: []
-        },
-        githubError,
-        crossVerification: blockedCrossVerification
-      });
-    }
-
-    // ========================================================
-    // IDENTITY VERIFIED -> Proceed with GitHub Skill Verification
+    // Proceed with GitHub Skill Verification
     // ========================================================
     let githubResult = null;
     try {
@@ -237,7 +167,7 @@ router.post('/verify', handleFileUpload, async (req, res) => {
     const crossVerification = matchSkills(claimedSkills, githubResult);
 
     // Format claimed skills with source, status, and evidence array
-    const candidateName = resumeIdentity?.name || '';
+    const finalCandidateName = candidateName || resumeIdentity?.name || '';
     const formattedSkills = await Promise.all(claimedSkills.map(async (c, idx) => {
       const match = crossVerification.results.find(r => r.skill.toLowerCase() === c.skill.toLowerCase());
       const rawStatus = match?.status || 'UNVERIFIED';
@@ -271,7 +201,7 @@ router.post('/verify', handleFileUpload, async (req, res) => {
 
       // 2. Extract and attach Observable Resume Evidence from actual resume project/experience context
       try {
-        const resumeEv = await extractResumeEvidenceForSkill(extracted.text, c.skill, candidateName);
+        const resumeEv = await extractResumeEvidenceForSkill(extracted.text, c.skill, finalCandidateName);
         if (resumeEv && resumeEv.evidenceItem) {
           initialEvidence.push({
             id: `ev_res_${idx}_${Math.random().toString(36).substring(2, 6)}`,

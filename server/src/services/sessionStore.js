@@ -27,6 +27,8 @@ export function normalizeSkillStatus(status = '') {
   const s = String(status).toUpperCase();
   if (s === 'PROVED' || s === 'PROVEN') return 'proven';
   if (s === 'PARTIAL' || s === 'PARTIALLY_PROVEN') return 'partially_proven';
+  if (s === 'FAILED' || s === 'NOT_PASSED') return 'failed';
+  if (s === 'INVALIDATED') return 'invalidated';
   return 'unverified';
 }
 
@@ -314,6 +316,16 @@ export function deleteSkillFromSession(sessionId, skillIdentifier) {
  * @returns {"proven" | "partially_proven" | "unverified"}
  */
 export function recalculateSkillStatus(skill) {
+  if (skill?.assessmentStatus === 'failed' || skill?.status === 'failed') {
+    return 'failed';
+  }
+  if (skill?.assessmentStatus === 'invalidated' || skill?.status === 'invalidated') {
+    return 'invalidated';
+  }
+  if (skill?.assessmentStatus === 'passed' || (skill?.assessmentResult && skill.assessmentResult.passed && skill.assessmentResult.percentage >= 70)) {
+    return 'proven';
+  }
+
   const evidence = Array.isArray(skill?.evidence)
     ? skill.evidence
     : [];
@@ -690,10 +702,13 @@ export function submitAssessment({ assessmentId, sessionId, answers = [] }) {
       });
 
       // Recalculate status and explanation
-      skill.status = recalculateSkillStatus(skill);
-      skill.explanation = `Demonstrated practical ${skill.skill} competency via micro-task assessment (${evaluation.percentage}% - ${evaluation.competency}).`;
+      skill.status = 'proven';
+      skill.assessmentStatus = 'passed';
+      skill.explanation = `Assessment Attempted (${evaluation.percentage}%) — Passed`;
     } else {
-      skill.explanation = `Attempted ${skill.skill} assessment (${evaluation.percentage}%), but did not meet passing threshold (70%).`;
+      skill.status = 'failed';
+      skill.assessmentStatus = 'failed';
+      skill.explanation = `Assessment Attempted (${evaluation.percentage}%) — Not Passed`;
     }
 
     skill.lastUpdatedAt = new Date().toISOString();

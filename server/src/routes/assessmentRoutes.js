@@ -3,7 +3,8 @@ import {
   startAssessment, 
   submitAssessment, 
   getAssessment,
-  getSession 
+  getSession,
+  createSession 
 } from '../services/sessionStore.js';
 import { 
   generateSkillAssessment, 
@@ -20,13 +21,6 @@ router.post('/skill-assessment/start', (req, res) => {
   try {
     const { sessionId, skill, difficulty = 'intermediate' } = req.body;
 
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Session ID is required.'
-      });
-    }
-
     if (!skill || typeof skill !== 'string') {
       return res.status(400).json({
         success: false,
@@ -34,7 +28,16 @@ router.post('/skill-assessment/start', (req, res) => {
       });
     }
 
-    const sanitizedAssessment = startAssessment({ sessionId, skill, difficulty });
+    const activeSessionId = sessionId || 'session_demo_candidate';
+    if (!getSession(activeSessionId)) {
+      createSession({
+        sessionId: activeSessionId,
+        candidateName: 'Candidate',
+        claimedSkills: [{ skill }]
+      });
+    }
+
+    const sanitizedAssessment = startAssessment({ sessionId: activeSessionId, skill, difficulty });
 
     return res.status(200).json({
       success: true,
