@@ -42,21 +42,21 @@ export default function IdentityVerificationSection({ identityVerification, isBl
           </span>
 
           <h3 className="identity-title">
-            {isVerified ? 'IDENTITY VERIFIED — ELIGIBLE FOR SKILL VERIFICATION' : (isMismatch ? 'IDENTITY MISMATCH DETECTED' : 'INSUFFICIENT IDENTITY EVIDENCE')}
+            {isVerified ? 'IDENTITY VERIFIED — ELIGIBLE FOR SKILL VERIFICATION' : 'IDENTITY VERIFICATION FAILED'}
           </h3>
 
           <p className="identity-subtitle">
             {isVerified 
-              ? 'The candidate in the uploaded resume was successfully linked to the submitted GitHub profile.' 
-              : (blockReason || 'The submitted GitHub profile could not be sufficiently linked to the candidate in the uploaded resume. Skill verification has been blocked.')}
+              ? 'The candidate identity was successfully verified across registration, resume, and GitHub.' 
+              : (blockReason || 'Identity verification failed — evidence not counted toward skill verification.')}
           </p>
         </div>
 
         {/* Status & Confidence Badge */}
         <div className="identity-status-box">
-          <div className={`identity-pill ${isVerified ? 'pill-verified' : (isMismatch ? 'pill-mismatch' : 'pill-insufficient')}`}>
+          <div className={`identity-pill ${isVerified ? 'pill-verified' : 'pill-mismatch'}`}>
             {isVerified ? <Unlock size={14} /> : <Lock size={14} />}
-            <span>{status.replace(/_/g, ' ')}</span>
+            <span>{isVerified ? 'VERIFIED' : 'Identity Verification Failed'}</span>
           </div>
           <span className="identity-confidence">
             Confidence: <strong>{confidence}%</strong>

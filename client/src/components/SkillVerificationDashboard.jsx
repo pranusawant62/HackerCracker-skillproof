@@ -68,9 +68,135 @@ export default function SkillVerificationDashboard({
     });
   };
 
+  const resolveSkillStatus = (item) => {
+    const asmt = item.assessmentResult || item.evidence?.find(e => e.type === 'microtask_assessment');
+    const asmtStatus = item.assessmentStatus || asmt?.status;
+    const hasScore = item.assessmentResult?.percentage != null || item.assessmentResult?.score != null || asmt?.percentage != null || asmt?.score != null;
+    const rawScore = item.assessmentResult?.percentage ?? item.assessmentResult?.score ?? asmt?.percentage ?? asmt?.score;
+    const asmtScore = hasScore ? Number(rawScore) : null;
+
+    // 1. Invalidated assessment
+    if (item.status === 'invalidated' || asmtStatus === 'invalidated') {
+      return {
+        type: 'invalidated',
+        badge: 'Assessment Invalidated',
+        badgeClass: 'badge-invalidated',
+        subPill: 'Assessment Invalidated — Focus Violation',
+        explanation: 'Assessment Invalidated — Focus Violation',
+        canRetake: true
+      };
+    }
+
+    // 2. Assessment attempted
+    const isAssessed = asmt != null || asmtStatus === 'passed' || asmtStatus === 'failed' || asmtStatus === 'not_passed' || item.status === 'failed' || item.status === 'not_passed';
+    if (isAssessed) {
+      const isPassed = asmtStatus === 'passed' || (asmtScore != null && asmtScore >= 70 && asmt?.passed !== false);
+      if (isPassed) {
+        const passScore = asmtScore != null ? asmtScore : (asmt?.percentage ?? 80);
+        return {
+          type: 'proven',
+          badge: 'Proven',
+          badgeClass: 'badge-proven',
+          subPill: `Assessment Attempted (${passScore}%) — Passed`,
+          explanation: `Assessment Attempted (${passScore}%) — Passed`,
+          score: passScore,
+          isPassed: true,
+          canRetake: true
+        };
+      } else {
+        const displayScore = asmtScore != null ? asmtScore : 0;
+        return {
+          type: 'failed',
+          badge: 'Not Passed',
+          badgeClass: 'badge-failed',
+          subPill: `Assessment Attempted (${displayScore}%) — Not Passed`,
+          explanation: `Assessment Attempted (${displayScore}%) — Not Passed`,
+          score: displayScore,
+          isFailed: true,
+          canRetake: true
+        };
+      }
+    }
+
+    // 3. No assessment attempted: check genuine non-assessment evidence
+    const nonAsmtEvidence = (item.evidence || []).filter(e => e.type !== 'microtask_assessment');
+    const certEv = nonAsmtEvidence.find(e => e.type === 'certificate' || e.type === 'credential');
+    const githubEv = nonAsmtEvidence.find(e => e.type === 'github_repo' || e.type === 'project_url');
+
+    if (item.status === 'proven' || certEv || githubEv) {
+      return {
+        type: 'proven',
+        badge: certEv ? 'DOCUMENT VERIFIED' : (githubEv ? 'GITHUB VERIFIED' : 'Proven'),
+        badgeClass: certEv ? 'badge-document' : (githubEv ? 'badge-github' : 'badge-proven'),
+        subPill: null,
+        explanation: item.explanation || 'Verified with observable evidence.',
+        isProven: true,
+        canRetake: false
+      };
+    }
+
+    if (item.status === 'partially_proven') {
+      const hasGenuinePartial = nonAsmtEvidence.some(e => e.verificationStatus === 'partially_proven' || e.evidenceRelevance === 'partial');
+      if (hasGenuinePartial) {
+        return {
+          type: 'partially_proven',
+          badge: 'Partially Proven',
+          badgeClass: 'badge-partial',
+          subPill: null,
+          explanation: item.explanation || 'Partial observable evidence detected.',
+          isPartial: true,
+          canRetake: false
+        };
+      }
+    }
+
+    // Default: Claimed-Only (Not Attempted)
+    return {
+      type: 'unverified',
+      badge: 'Claimed-Only',
+      badgeClass: 'badge-unverified',
+      subPill: null,
+      explanation: 'No assessment has been attempted for this skill.',
+      isUnverified: true,
+      canRetake: false
+    };
+  };
+
   const handleAssessmentCompleted = (data) => {
-    if (onEvidenceSubmitted && data.session) {
-      onEvidenceSubmitted(data.session);
+    if (data.session) {
+      if (onEvidenceSubmitted) onEvidenceSubmitted(data.session);
+    } else if (data.skillName) {
+      const targetSkillName = data.skillName.toLowerCase();
+      const updatedSkills = claimedSkills.map(s => {
+        if ((s.skill || s.name || '').toLowerCase() === targetSkillName) {
+          if (data.invalidated) {
+            return {
+              ...s,
+              status: 'invalidated',
+              assessmentStatus: 'invalidated',
+              explanation: 'Assessment Invalidated — Focus Violation'
+            };
+          }
+          const asmtRes = data.assessmentResult;
+          const passed = asmtRes?.passed === true && (asmtRes?.percentage >= 70);
+          return {
+            ...s,
+            status: passed ? 'proven' : 'failed',
+            assessmentStatus: passed ? 'passed' : 'failed',
+            assessmentResult: asmtRes,
+            explanation: passed
+              ? `Assessment Attempted (${asmtRes?.percentage}%) — Passed`
+              : `Assessment Attempted (${asmtRes?.percentage || 0}%) — Not Passed`
+          };
+        }
+        return s;
+      });
+
+      if (onEvidenceSubmitted) {
+        onEvidenceSubmitted({
+          claimedSkills: updatedSkills
+        });
+      }
     }
   };
 
@@ -99,9 +225,12 @@ export default function SkillVerificationDashboard({
   };
 
   // Categorize skills into the 3 canonical groups
-  const provenSkills = claimedSkills.filter(s => s.status === 'proven');
-  const partiallyProvenSkills = claimedSkills.filter(s => s.status === 'partially_proven');
-  const unverifiedSkills = claimedSkills.filter(s => s.status === 'unverified' || !s.status);
+  const provenSkills = claimedSkills.filter(s => resolveSkillStatus(s).type === 'proven');
+  const partiallyProvenSkills = claimedSkills.filter(s => resolveSkillStatus(s).type === 'partially_proven');
+  const unverifiedSkills = claimedSkills.filter(s => {
+    const t = resolveSkillStatus(s).type;
+    return t === 'unverified' || t === 'failed' || t === 'invalidated';
+  });
 
   const displayedSkills = activeTab === 'proven' 
     ? provenSkills 
@@ -230,37 +359,19 @@ export default function SkillVerificationDashboard({
           </div>
         ) : (
           displayedSkills.map((item) => {
-            const isProven = item.status === 'proven';
-            const isPartial = item.status === 'partially_proven';
-            const isUnverified = !isProven && !isPartial;
+            const resolved = resolveSkillStatus(item);
             const isExpanded = expandedSkillId === item.id;
             const evidenceCount = item.evidence?.length || 0;
             const isManualClaim = item.claimSource === 'manual' || item.source === 'manual';
             const confidenceScore = item.evidence?.reduce(
               (max, ev) => Math.max(max, Number(ev?.confidenceScore) || (ev?.confidence === 'high' ? 95 : (ev?.confidence === 'medium' ? 70 : 0))), 
               0
-            ) || (isProven ? 95 : 0);
-
-            const microtaskEv = item.evidence?.find(e => e.type === 'microtask_assessment');
-            const certEv = item.evidence?.find(e => e.type === 'certificate' || e.type === 'credential');
-            const githubEv = item.evidence?.find(e => e.type === 'github_repo' || e.type === 'project_url');
-
-            const isMicrotaskVerified = Boolean(
-              (microtaskEv && microtaskEv.passed !== false) ||
-              item.verificationMethod === 'microtask_assessment' ||
-              item.assessmentStatus === 'passed'
-            );
-            const isDocumentVerified = Boolean(certEv && !isMicrotaskVerified);
-            const isGithubVerified = Boolean(githubEv && !isMicrotaskVerified && !isDocumentVerified);
-
-            const asmtScore = item.assessmentResult?.percentage || item.assessmentResult?.score || microtaskEv?.percentage || microtaskEv?.score;
-            const asmtCompetency = item.assessmentResult?.competency || microtaskEv?.competency || 'Strong';
-            const isFailedAssessment = item.assessmentStatus === 'failed';
+            ) || (resolved.isPassed ? (resolved.score || 95) : (resolved.isProven ? 95 : 0));
 
             return (
               <div 
                 key={item.id || item.skill} 
-                className={`sv-skill-card ${isProven ? 'status-proven' : (isPartial ? 'status-partial' : 'status-unverified')}`}
+                className={`sv-skill-card ${resolved.type === 'proven' ? 'status-proven' : (resolved.type === 'failed' || resolved.type === 'invalidated' ? 'status-failed' : (resolved.type === 'partially_proven' ? 'status-partial' : 'status-unverified'))}`}
               >
                 <div className="sv-skill-main-row">
                   {/* Left: Skill Name & Claim Source Badge */}
@@ -273,72 +384,49 @@ export default function SkillVerificationDashboard({
                         {isManualClaim ? 'Added by Candidate' : 'From Resume'}
                       </span>
 
-                      <span className="sv-confidence-tag" style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '10px', background: 'rgba(255, 255, 255, 0.06)', color: 'var(--text-secondary)', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
-                        Confidence: {confidenceScore}%
-                      </span>
+                      {resolved.type === 'unverified' ? (
+                        <span className="sv-confidence-tag" style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '10px', background: 'rgba(255, 255, 255, 0.06)', color: 'var(--text-secondary)', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                          Not Attempted
+                        </span>
+                      ) : (
+                        <span className="sv-confidence-tag" style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '10px', background: 'rgba(255, 255, 255, 0.06)', color: 'var(--text-secondary)', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                          Confidence: {confidenceScore}%
+                        </span>
+                      )}
 
                       {item.category && item.category !== 'Other' && (
                         <span className="sv-category-pill">{item.category}</span>
                       )}
 
-                      {/* Micro-task Verified Badge Indicator */}
-                      {isMicrotaskVerified && (
-                        <span className="sv-microtask-score-pill">
-                          Score: {asmtScore}% • {asmtCompetency}
-                        </span>
-                      )}
-
-                      {isFailedAssessment && (
-                        <span className="sv-microtask-failed-pill">
-                          Assessment Attempted ({asmtScore || 0}%) — Not Passed
+                      {/* Sub-Pill: Assessment Attempted / Invalidated */}
+                      {resolved.subPill && (
+                        <span className={resolved.isPassed ? 'sv-microtask-score-pill' : 'sv-microtask-failed-pill'}>
+                          {resolved.subPill}
                         </span>
                       )}
                     </div>
 
                     <p className="sv-skill-explanation">
-                      {isMicrotaskVerified
-                        ? `Practical competency verified through skill micro-task assessment (${asmtScore}% score, ${asmtCompetency}).`
-                        : isFailedAssessment
-                        ? `Practical micro-task assessment attempted (${asmtScore || 0}%), but score fell below the 70% threshold. You can retake it to demonstrate competence.`
-                        : (item.explanation || (isProven ? 'Verified with observable evidence.' : 'No direct evidence found.'))}
+                      {resolved.explanation}
                     </p>
                   </div>
 
                   {/* Right: Status Pill & Action Buttons */}
                   <div className="sv-skill-actions-right">
-                    {/* Status Pill - Clearly distinguishing verification sources */}
-                    {isMicrotaskVerified ? (
-                      <div className="sv-status-badge badge-microtask">
-                        <ShieldCheck size={14} />
-                        <span>MICRO-TASK VERIFIED</span>
-                        {asmtScore != null && <span className="badge-score-number">{asmtScore}%</span>}
-                      </div>
-                    ) : isDocumentVerified ? (
-                      <div className="sv-status-badge badge-document">
-                        <Award size={14} />
-                        <span>DOCUMENT VERIFIED</span>
-                      </div>
-                    ) : isGithubVerified ? (
-                      <div className="sv-status-badge badge-github">
-                        <FolderGit2 size={14} />
-                        <span>GITHUB VERIFIED</span>
-                      </div>
-                    ) : isProven ? (
-                      <div className="sv-status-badge badge-proven">
+                    {/* Status Pill */}
+                    <div className={`sv-status-badge ${resolved.badgeClass}`}>
+                      {resolved.type === 'proven' ? (
                         <CheckCircle2 size={14} />
-                        <span>Proven</span>
-                      </div>
-                    ) : isPartial ? (
-                      <div className="sv-status-badge badge-partial">
+                      ) : resolved.type === 'partially_proven' ? (
                         <HelpCircle size={14} />
-                        <span>Partially Proven</span>
-                      </div>
-                    ) : (
-                      <div className="sv-status-badge badge-unverified">
+                      ) : (
                         <XCircle size={14} />
-                        <span>Claimed-Only</span>
-                      </div>
-                    )}
+                      )}
+                      <span>{resolved.badge}</span>
+                      {resolved.isPassed && resolved.score != null && (
+                        <span className="badge-score-number">{resolved.score}%</span>
+                      )}
+                    </div>
 
                     {/* View Evidence Toggle */}
                     {evidenceCount > 0 && (
@@ -353,7 +441,7 @@ export default function SkillVerificationDashboard({
                     )}
 
                     {/* Micro-Task Assessment Action Buttons */}
-                    {isMicrotaskVerified ? (
+                    {resolved.isPassed ? (
                       <>
                         <button
                           type="button"
@@ -368,13 +456,13 @@ export default function SkillVerificationDashboard({
                           type="button"
                           className="btn-sv-retake-assessment"
                           onClick={() => handleOpenAssessment(item, false)}
-                          title={`Retake ${item.skill} assessment`}
+                          title={`Retake ${item.skill} micro-task assessment`}
                         >
                           <RotateCcw size={13} />
-                          <span>Retake Assessment</span>
+                          <span>Retake Micro-Task</span>
                         </button>
                       </>
-                    ) : isFailedAssessment ? (
+                    ) : resolved.canRetake ? (
                       <button
                         type="button"
                         className="btn-sv-retake-microtask"
@@ -389,10 +477,10 @@ export default function SkillVerificationDashboard({
                         type="button"
                         className="btn-sv-prove-microtask"
                         onClick={() => handleOpenAssessment(item, false)}
-                        title={isProven ? `Take ${item.skill} skill assessment` : `Prove ${item.skill} with a practical micro-task`}
+                        title={resolved.type === 'proven' ? `Take ${item.skill} skill assessment` : `Prove ${item.skill} with a practical micro-task`}
                       >
                         <ShieldCheck size={14} />
-                        <span>{isProven ? 'Take Skill Assessment' : 'Prove with Micro-Task'}</span>
+                        <span>Take Skill Assessment</span>
                       </button>
                     )}
 

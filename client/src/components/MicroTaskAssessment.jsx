@@ -13,7 +13,8 @@ import {
   Lightbulb,
   Check,
   TrendingUp,
-  Award
+  Award,
+  AlertTriangle
 } from 'lucide-react';
 import { startAssessmentApi, submitAssessmentApi } from '../services/api.js';
 
@@ -33,6 +34,8 @@ export default function MicroTaskAssessment({
   const [timeLeft, setTimeLeft] = useState(600); // 10 minutes default
   const [submissionResult, setSubmissionResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [focusViolations, setFocusViolations] = useState(0);
+  const [focusWarning, setFocusWarning] = useState(null);
 
   // When modal opens or existingAssessmentResult is provided
   useEffect(() => {
@@ -49,8 +52,52 @@ export default function MicroTaskAssessment({
       setSubmissionResult(null);
       setErrorMessage('');
       setTimeLeft(600);
+      setFocusViolations(0);
+      setFocusWarning(null);
     }
   }, [isOpen, existingAssessmentResult, skillName]);
+
+  // Anti-cheating: Page Visibility API & Window Focus detection when taking assessment
+  // Leaving the assessment window immediately invalidates current attempt
+  useEffect(() => {
+    if (phase !== 'taking') return;
+
+    const handleFocusLoss = () => {
+      setFocusViolations(1);
+      setPhase('invalidated');
+      if (onAssessmentCompleted) {
+        onAssessmentCompleted({
+          invalidated: true,
+          skillName,
+          focusViolations: 1,
+          assessmentResult: {
+            status: 'invalidated',
+            passed: false,
+            focusViolations: 1,
+            skill: skillName
+          }
+        });
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        handleFocusLoss();
+      }
+    };
+
+    const handleWindowBlur = () => {
+      handleFocusLoss();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [phase]);
 
   // Timer countdown while taking assessment
   useEffect(() => {
@@ -94,19 +141,45 @@ export default function MicroTaskAssessment({
         throw new Error('Received invalid assessment structure from server.');
       }
 
-      // Strictly ensure 5 questions
-      const questions = data.assessment.questions.slice(0, 5);
+      // Strictly ensure 5 questions and randomize question order for this attempt
+      const rawQuestions = data.assessment.questions.slice(0, 5);
+      const shuffledQuestions = [...rawQuestions];
+      for (let i = shuffledQuestions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffledQuestions[i], shuffledQuestions[j]] = [shuffledQuestions[j], shuffledQuestions[i]];
+      }
+
+      // Randomize multiple-choice option order if options exist
+      const normalizedQuestions = shuffledQuestions.map((q, idx) => {
+        let opts = q.options;
+        if (Array.isArray(opts) && opts.length > 1) {
+          const shuffledOpts = [...opts];
+          for (let i = shuffledOpts.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffledOpts[i], shuffledOpts[j]] = [shuffledOpts[j], shuffledOpts[i]];
+          }
+          opts = shuffledOpts;
+        }
+        return {
+          ...q,
+          options: opts,
+          questionNumber: idx + 1
+        };
+      });
+
       const normalizedAssessment = {
         ...data.assessment,
-        questions
+        questions: normalizedQuestions
       };
 
       setAssessment(normalizedAssessment);
       setTimeLeft(data.assessment.estimatedTimeMinutes ? data.assessment.estimatedTimeMinutes * 60 : 600);
+      setFocusViolations(0);
+      setFocusWarning(null);
       
       // Initialize starter answers
       const initialAnswers = {};
-      questions.forEach(q => {
+      normalizedQuestions.forEach(q => {
         initialAnswers[q.id] = q.starterCode || '';
       });
       setAnswers(initialAnswers);
@@ -154,9 +227,13 @@ export default function MicroTaskAssessment({
 
       if (onAssessmentCompleted) {
         onAssessmentCompleted({
-          assessmentResult: res,
+          assessmentResult: {
+            ...res,
+            focusViolations
+          },
           session: response.session,
-          skillName: res.skill || skillName
+          skillName: res.skill || skillName,
+          focusViolations
         });
       }
     } catch (err) {
@@ -174,6 +251,8 @@ export default function MicroTaskAssessment({
     setSubmissionResult(null);
     setErrorMessage('');
     setTimeLeft(600);
+    setFocusViolations(0);
+    setFocusWarning(null);
   };
 
   const currentQuestion = assessment?.questions?.[currentQuestionIndex];
@@ -237,20 +316,20 @@ export default function MicroTaskAssessment({
                   </div>
                 </div>
 
-                <div className="microtask-rules-box">
-                  <div className="rules-header">
-                    <Lightbulb size={16} color="var(--accent-secondary)" />
-                    <strong>How Practical Micro-Task Verification Works</strong>
+                <div className="microtask-rules-box" style={{ marginTop: '16px' }}>
+                  <div className="rules-header" style={{ marginBottom: '12px' }}>
+                    <ShieldCheck size={18} color="var(--accent-secondary)" />
+                    <strong style={{ fontSize: '1rem', letterSpacing: '0.02em' }}>ASSESSMENT INSTRUCTIONS</strong>
                   </div>
-                  <p>
-                    This assessment is <strong>100% specific to {skillName}</strong>. You will solve exactly 5 hands-on 
-                    tasks designed to test real practical competency:
-                  </p>
-                  <ul>
-                    <li><strong>Questions 1 &ndash; 5:</strong> Progress from foundational tasks to real-world problem solving.</li>
-                    <li><strong>Authoritative Backend Grading:</strong> Your solutions are evaluated deterministically on the backend.</li>
-                    <li><strong>Passing Threshold:</strong> Scoring <strong>70% or higher</strong> grants <strong>MICRO-TASK VERIFIED</strong> status for {skillName}.</li>
-                    <li>Your work and timer are preserved as you navigate between questions.</li>
+                  <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.7', color: '#e2e8f0', fontSize: '0.92rem' }}>
+                    <li>You have <strong>5 practical questions</strong>.</li>
+                    <li>Time limit: <strong>10 minutes</strong>.</li>
+                    <li>Passing score: <strong>70%</strong>.</li>
+                    <li>Questions are <strong>specific to the selected skill ({skillName})</strong>.</li>
+                    <li><strong>Do not switch browser tabs or windows</strong> during the assessment.</li>
+                    <li><strong>Do not minimize the browser</strong> or leave the assessment window.</li>
+                    <li>Leaving the assessment window will <strong>immediately invalidate the current attempt</strong>.</li>
+                    <li>Once an attempt is invalidated, the candidate must start a new attempt.</li>
                   </ul>
                 </div>
               </div>
@@ -259,7 +338,7 @@ export default function MicroTaskAssessment({
                 <button type="button" className="btn-secondary" onClick={onClose}>
                   Cancel
                 </button>
-                <button type="button" className="btn-primary-action" onClick={handleStart}>
+                <button type="button" className="btn-primary-action" onClick={handleStart} id="start-assessment-btn">
                   <span>Start Assessment</span>
                   <ArrowRight size={16} />
                 </button>
@@ -306,6 +385,8 @@ export default function MicroTaskAssessment({
                   style={{ width: `${((currentQuestionIndex + 1) / 5) * 100}%` }}
                 />
               </div>
+
+
 
               {/* Question Display Card */}
               <div className="question-display-card">
@@ -426,7 +507,7 @@ export default function MicroTaskAssessment({
               <div className="results-summary-box">
                 <div className="results-summary-header">
                   <Award size={20} color="var(--accent-secondary)" />
-                  <h4>Assessment Completed</h4>
+                  <h4>ASSESSMENT COMPLETED</h4>
                 </div>
 
                 <div className="results-metrics-grid">
@@ -439,15 +520,15 @@ export default function MicroTaskAssessment({
                     <span className="metric-val">5</span>
                   </div>
                   <div className="metric-item">
-                    <span className="metric-label">Correct</span>
-                    <span className="metric-val">
+                    <span className="metric-label">Score</span>
+                    <span className="metric-val highlight">
                       {Array.isArray(submissionResult.results) 
-                        ? submissionResult.results.filter(r => r.isCorrect).length 
-                        : (submissionResult.passed ? 4 : 2)}
+                        ? `${submissionResult.results.filter(r => r.isCorrect).length}/5` 
+                        : (submissionResult.passed ? '4/5' : '2/5')}
                     </span>
                   </div>
                   <div className="metric-item">
-                    <span className="metric-label">Score</span>
+                    <span className="metric-label">Percentage</span>
                     <span className="metric-val highlight">
                       {submissionResult.percentage}%
                     </span>
@@ -455,7 +536,15 @@ export default function MicroTaskAssessment({
                   <div className="metric-item status-metric">
                     <span className="metric-label">Status</span>
                     <span className={`status-badge-val ${submissionResult.passed ? 'passed' : 'failed'}`}>
-                      {submissionResult.passed ? 'MICRO-TASK VERIFIED' : 'NOT VERIFIED'}
+                      {submissionResult.passed ? 'VERIFIED' : 'NOT VERIFIED'}
+                    </span>
+                  </div>
+                  <div className="metric-item">
+                    <span className="metric-label">Focus Violations</span>
+                    <span className="metric-val" style={{
+                      color: (submissionResult.focusViolations ?? focusViolations) === 0 ? '#34d399' : '#ef4444'
+                    }}>
+                      {(submissionResult.focusViolations ?? focusViolations) || 0}
                     </span>
                   </div>
                 </div>
@@ -547,14 +636,91 @@ export default function MicroTaskAssessment({
                 </div>
               </div>
 
-              {/* Footer Actions: Retake & Done */}
+              {/* Footer Actions: Retake & Return to Skill Verification */}
               <div className="results-footer-row">
-                <button type="button" className="btn-secondary" onClick={handleRetake}>
+                <button type="button" className="btn-secondary" onClick={handleRetake} id="results-retake-btn">
                   <RotateCcw size={15} />
                   <span>Retake Assessment</span>
                 </button>
-                <button type="button" className="btn-primary-action" onClick={onClose}>
-                  <span>Done</span>
+                <button type="button" className="btn-primary-action" onClick={onClose} id="return-skill-verification-btn">
+                  <span>Return to Skill Verification</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Phase: Invalidated Attempt due to Focus / Tab Switch */}
+          {phase === 'invalidated' && (
+            <div className="microtask-center-state" style={{ padding: '36px 24px', textAlign: 'center' }}>
+              <div style={{
+                width: '64px',
+                height: '64px',
+                borderRadius: '50%',
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 20px auto'
+              }}>
+                <AlertTriangle size={34} color="#ef4444" />
+              </div>
+              <h3 style={{ color: '#ef4444', fontSize: '1.4rem', fontWeight: 700, marginBottom: '8px', letterSpacing: '0.02em' }}>
+                ASSESSMENT INVALIDATED
+              </h3>
+              <div style={{
+                display: 'inline-block',
+                background: 'rgba(239, 68, 68, 0.2)',
+                border: '1px solid #ef4444',
+                color: '#fca5a5',
+                padding: '4px 14px',
+                borderRadius: '20px',
+                fontSize: '0.82rem',
+                fontWeight: 600,
+                marginBottom: '18px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em'
+              }}>
+                INVALIDATED &mdash; FOCUS VIOLATION
+              </div>
+              <p style={{ color: '#f1f5f9', fontSize: '1rem', maxWidth: '480px', margin: '0 auto 10px auto', lineHeight: '1.6' }}>
+                You left the assessment window during the assessment.
+              </p>
+              <p style={{ color: '#94a3b8', fontSize: '0.92rem', maxWidth: '480px', margin: '0 auto 22px auto', lineHeight: '1.5' }}>
+                This attempt has been invalidated because tab/window switching is not allowed.
+              </p>
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.7)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                padding: '10px 22px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '28px'
+              }}>
+                <span style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Focus violations:</span>
+                <span style={{ color: '#ef4444', fontWeight: 700, fontSize: '1.05rem' }}>1</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
+                <button
+                  type="button"
+                  className="btn-primary-action"
+                  onClick={handleRetake}
+                  id="retake-assessment-btn"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '10px 24px',
+                    fontSize: '0.95rem',
+                    fontWeight: 600,
+                    borderRadius: '8px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <RotateCcw size={16} />
+                  <span>Retake Assessment</span>
                 </button>
               </div>
             </div>

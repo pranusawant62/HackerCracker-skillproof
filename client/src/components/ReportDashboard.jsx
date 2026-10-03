@@ -30,7 +30,6 @@ import CrossVerificationSection from './CrossVerificationSection.jsx';
 import FinalReportSection from './FinalReportSection.jsx';
 import EvidenceExplorer from './EvidenceExplorer.jsx';
 import JobMatchSection from './JobMatchSection.jsx';
-import IdentityVerificationSection from './IdentityVerificationSection.jsx';
 import SkillVerificationDashboard from './SkillVerificationDashboard.jsx';
 import AddSkillModal from './AddSkillModal.jsx';
 import AddEvidenceModal from './AddEvidenceModal.jsx';
@@ -187,10 +186,7 @@ export default function ReportDashboard({
     resume = activeSession?.resume, 
     github = activeSession?.github, 
     githubError = activeSession?.githubError, 
-    crossVerification = activeSession?.crossVerification,
-    identityVerification = activeSession?.identityVerification,
-    isBlocked = activeSession?.identityStatus === 'blocked' || activeSession?.isBlocked,
-    blockReason = activeSession?.blockReason
+    crossVerification = activeSession?.crossVerification
   } = activeSession || {};
 
   // Group skills by category for Stage 2
@@ -242,18 +238,6 @@ export default function ReportDashboard({
         </div>
       )}
 
-      {/* Security Gate Blocked Notification */}
-      {isBlocked && (
-        <div className="github-error-card" style={{ background: 'rgba(239, 68, 68, 0.12)', borderColor: 'rgba(239, 68, 68, 0.35)' }}>
-          <AlertCircle size={24} style={{ flexShrink: 0, color: '#f87171' }} />
-          <div>
-            <strong style={{ display: 'block', fontSize: '1rem', marginBottom: '0.35rem', color: '#f87171' }}>
-              GitHub Repository Analysis Blocked
-            </strong>
-            <span>Because candidate identity verification did not pass, repositories from @{githubUsername} cannot be inspected or credited as skill evidence for this resume.</span>
-          </div>
-        </div>
-      )}
 
       {/* GitHub User Profile Header Card */}
       {github?.profile && (
@@ -392,7 +376,7 @@ export default function ReportDashboard({
       )}
 
       {/* Empty state when no GitHub profile is linked */}
-      {!github?.profile && !githubError && !isBlocked && (
+      {!github?.profile && !githubError && (
         <div className="repos-empty-state" style={{ padding: '1.5rem', background: 'rgba(30, 41, 59, 0.4)', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.05)', textAlign: 'center' }}>
           <FolderGit2 size={24} style={{ color: 'var(--text-subtle)', margin: '0 auto 0.5rem auto' }} />
           <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
@@ -410,14 +394,6 @@ export default function ReportDashboard({
           ======================================================== */}
       {activeView === 'dashboard' && (
         <div id="dashboard-view" className="spa-view-container">
-          {/* Candidate Identity Verification (Security Gate) */}
-          {identityVerification && (
-            <IdentityVerificationSection 
-              identityVerification={identityVerification}
-              isBlocked={isBlocked}
-              blockReason={blockReason}
-            />
-          )}
 
           {/* Stage 1: Resume Ingestion Status */}
           <section className="extraction-success-card">
@@ -503,18 +479,16 @@ export default function ReportDashboard({
                     {claimedSkills.length} {claimedSkills.length === 1 ? 'Skill' : 'Skills'} Identified
                   </span>
                 )}
-                {!isBlocked && (
-                  <button
-                    type="button"
-                    className="btn-add-skill-primary"
-                    onClick={() => setIsStage2AddSkillOpen(true)}
-                    title="Add a technical skill manually to claimed skills"
-                    style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem' }}
-                  >
-                    <PlusCircle size={15} />
-                    <span>+ Add Skill</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn-add-skill-primary"
+                  onClick={() => setIsStage2AddSkillOpen(true)}
+                  title="Add a technical skill manually to claimed skills"
+                  style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem' }}
+                >
+                  <PlusCircle size={15} />
+                  <span>+ Add Skill</span>
+                </button>
               </div>
             </div>
 
@@ -584,18 +558,16 @@ export default function ReportDashboard({
           ======================================================== */}
       {activeView === 'skills' && (
         <div id="skills-view" className="spa-view-container">
-          {!isBlocked && (
-            <SkillVerificationDashboard 
-              key={activeSession?.updatedAt || activeSession?.sessionId}
-              sessionId={sessionId}
-              githubUsername={githubUsername}
-              claimedSkills={claimedSkills}
-              summary={summary}
-              onSkillAdded={onSkillAdded}
-              onEvidenceSubmitted={onEvidenceSubmitted}
-              onSkillDeleted={onSkillDeleted}
-            />
-          )}
+          <SkillVerificationDashboard 
+            key={activeSession?.updatedAt || activeSession?.sessionId}
+            sessionId={sessionId}
+            githubUsername={githubUsername}
+            claimedSkills={claimedSkills}
+            summary={summary}
+            onSkillAdded={onSkillAdded}
+            onEvidenceSubmitted={onEvidenceSubmitted}
+            onSkillDeleted={onSkillDeleted}
+          />
         </div>
       )}
 
@@ -605,18 +577,16 @@ export default function ReportDashboard({
       {activeView === 'evidence' && (
         <div id="evidence-view" className="spa-view-container">
           {/* Multi-Source Skill Verification & Direct Evidence Cards */}
-          {!isBlocked && (
-            <SkillVerificationDashboard 
-              key={activeSession?.updatedAt || activeSession?.sessionId}
-              sessionId={sessionId}
-              githubUsername={githubUsername}
-              claimedSkills={claimedSkills}
-              summary={summary}
-              onSkillAdded={onSkillAdded}
-              onEvidenceSubmitted={onEvidenceSubmitted}
-              onSkillDeleted={onSkillDeleted}
-            />
-          )}
+          <SkillVerificationDashboard 
+            key={activeSession?.updatedAt || activeSession?.sessionId}
+            sessionId={sessionId}
+            githubUsername={githubUsername}
+            claimedSkills={claimedSkills}
+            summary={summary}
+            onSkillAdded={onSkillAdded}
+            onEvidenceSubmitted={onEvidenceSubmitted}
+            onSkillDeleted={onSkillDeleted}
+          />
 
           {/* Stage 7: Evidence Explorer */}
           <EvidenceExplorer 

@@ -5,15 +5,18 @@
  * skill evidence, job matching, skill growth, and assessments.
  */
 
-// Deployed SkillProof backend
+// Backend API URL: localhost during local development, or deployed backend
 const API_BASE_URL =
-  'https://hacker-cracker-skillproof-pbwb-5rqctb5uv-hackcracker.vercel.app';
+  import.meta.env?.VITE_API_URL ||
+  (typeof window !== 'undefined' && window.location.hostname === 'localhost'
+    ? 'http://localhost:5000'
+    : 'https://hacker-cracker-skillproof-pbwb-5rqctb5uv-hackcracker.vercel.app');
 
 /**
  * Sends the candidate's resume PDF and GitHub handle
  * to the backend verification endpoint.
  */
-export async function verifyCandidate(resumeFile, githubUsername) {
+export async function verifyCandidate(resumeFile, githubUsername, candidateName) {
   if (!resumeFile) {
     throw new Error('Please select a resume PDF file.');
   }
@@ -25,6 +28,9 @@ export async function verifyCandidate(resumeFile, githubUsername) {
   const formData = new FormData();
   formData.append('resume', resumeFile);
   formData.append('githubUsername', githubUsername.trim());
+  if (candidateName && typeof candidateName === 'string') {
+    formData.append('candidateName', candidateName.trim());
+  }
 
   // Do NOT set Content-Type manually for FormData.
   const response = await fetch(`${API_BASE_URL}/api/verify`, {
@@ -465,9 +471,7 @@ export async function startAssessmentApi({
   skill,
   difficulty = 'intermediate'
 }) {
-  if (!sessionId) {
-    throw new Error('Session ID is required.');
-  }
+  const activeSessionId = sessionId || 'session_demo_candidate';
 
   if (!skill) {
     throw new Error('Skill name is required.');
@@ -481,7 +485,7 @@ export async function startAssessmentApi({
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        sessionId,
+        sessionId: activeSessionId,
         skill,
         difficulty
       })
@@ -513,6 +517,8 @@ export async function submitAssessmentApi({
     throw new Error('Assessment ID is required.');
   }
 
+  const activeSessionId = sessionId || 'session_demo_candidate';
+
   const response = await fetch(
     `${API_BASE_URL}/api/skill-assessment/submit`,
     {
@@ -522,7 +528,7 @@ export async function submitAssessmentApi({
       },
       body: JSON.stringify({
         assessmentId,
-        sessionId,
+        sessionId: activeSessionId,
         answers
       })
     }
